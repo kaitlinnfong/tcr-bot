@@ -73,12 +73,18 @@ async def create_channel(member: discord.Member) -> None:
         guild.default_role: discord.PermissionOverwrite(view_channel=False),
         member: discord.PermissionOverwrite(
             view_channel=True, send_messages=True, read_message_history=True,
-            attach_files=True, embed_links=True,
         ),
         guild.me: discord.PermissionOverwrite(
-            view_channel=True, send_messages=True, manage_channels=True,
+            view_channel=True, send_messages=True, read_message_history=True,
         ),
     }
+    me = guild.me.guild_permissions
+    if not me.administrator:
+        # Only grant extras the bot itself has, otherwise Discord rejects the channel.
+        if me.attach_files:
+            overwrites[member].attach_files = True
+        if me.embed_links:
+            overwrites[member].embed_links = True
     if STAFF_ROLE_NAME:
         staff = discord.utils.get(guild.roles, name=STAFF_ROLE_NAME)
         if staff:
@@ -86,7 +92,10 @@ async def create_channel(member: discord.Member) -> None:
                 view_channel=True, send_messages=True, read_message_history=True,
             )
 
-    category = await get_category(guild)
+    try:
+        category = await get_category(guild)
+    except discord.HTTPException as e:
+        raise discord.HTTPException(e.response, f"while creating the '{CATEGORY_NAME}' category: {e.text}")
     channel = await guild.create_text_channel(
         name=f"{CHANNEL_PREFIX}-{slug(member.display_name)}",
         category=category,
@@ -102,6 +111,15 @@ async def create_channel(member: discord.Member) -> None:
 async def on_ready():
     print(f"Logged in as {client.user}")
     for guild in client.guilds:
+        p = guild.me.guild_permissions
+        needed = ["view_channel", "manage_channels", "manage_roles", "send_messages", "read_message_history"]
+        missing = [n for n in needed if not getattr(p, n)] if not p.administrator else []
+        top_role = guild.me.top_role
+        print(f"[{guild.name}] Bot role: '{top_role.name}' (position {top_role.position} of {len(guild.roles) - 1})")
+        print(f"[{guild.name}] Administrator: {p.administrator} | Missing permissions: {missing or 'none'}")
+        if missing:
+            print(f"[{guild.name}] Fix: Server Settings > Roles > '{top_role.name}' > turn on {', '.join(missing)}, then restart.")
+            continue
         done = existing_member_ids(guild)
         todo = [m for m in guild.members if not m.bot and m.id not in done and m != guild.owner]
         print(f"[{guild.name}] {len(todo)} member(s) need a 1:1 channel")
